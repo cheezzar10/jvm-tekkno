@@ -1,0 +1,4 @@
+.cproject
+bin
+*.log
+.vscode
