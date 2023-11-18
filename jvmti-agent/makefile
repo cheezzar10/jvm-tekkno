@@ -3,14 +3,15 @@ OUTPUT_DIR := bin
 
 JAVA_HOME := $(HOME)/.sdkman/candidates/java/current
 
-.INCLUDE_DIRS += $(JAVA_HOME)/include $(JAVA_HOME)/include/darwin
+# TODO may be parameterize on MAKE_HOST variable (linux or darwin)
+.INCLUDE_DIRS += $(JAVA_HOME)/include $(JAVA_HOME)/include/linux
 INCLUDES := $(foreach include_dir,$(.INCLUDE_DIRS),-I $(include_dir))
 
-CFLAGS = -Wall -std=c11
-LDFLAGS := -dynamiclib
+CFLAGS = -Wall -std=gnu11
+LDFLAGS := -shared -fPIC
 
 AGENT_NAME := agent
-AGENT_LIB := $(AGENT_NAME).dylib
+AGENT_LIB := $(AGENT_NAME).so
 
 COMPILE.c = $(CC) $(INCLUDES) $(CFLAGS) $(CPPFLAGS) $(TARGET_ARCH) -c
 
@@ -36,4 +37,4 @@ $(OUTPUT_DIR)/hashmap.o: hashmap.c
 
 .PHONY: clean
 clean:
-	rm -f $(OUTPUT_DIR)/*.dylib $(OUTPUT_DIR)/*.o
+	rm -f $(OUTPUT_DIR)/*.so $(OUTPUT_DIR)/*.o

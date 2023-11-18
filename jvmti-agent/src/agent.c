@@ -4,6 +4,7 @@
 #include <stdatomic.h>
 #include <unistd.h>
 #include <stdarg.h>
+#include <stdint.h>
 
 #include "jvmti.h"
 
@@ -21,7 +22,7 @@ typedef struct {
 
 static atomic_uintptr_t agent_data_ref = ATOMIC_VAR_INIT(0);
 
-static void log(const char* format, ...) {
+static void log_debug(const char* format, ...) {
 	va_list args;
 	va_start(args, format);
 
@@ -39,12 +40,12 @@ static void log(const char* format, ...) {
 static void redefine_class(FILE* class_file, jint class_bytes_count) {
 	AgentData* agent_data = (AgentData*)atomic_load(&agent_data_ref);
 
-	log("reading class file bytes");
+	log_debug("reading class file bytes");
 
 	unsigned char class_file_bytes[class_bytes_count];
 	size_t blocks_read = fread(class_file_bytes, class_bytes_count, 1, class_file);
 	if (blocks_read < 1) {
-		log("failed to read class file bytes");
+		log_debug("failed to read class file bytes");
 		return;
 	}
 
@@ -53,30 +54,30 @@ static void redefine_class(FILE* class_file, jint class_bytes_count) {
 			{ klass, class_bytes_count, class_file_bytes }
 	};
 
-	log("redefining class");
+	log_debug("redefining class");
 	jvmtiError error = (*agent_data->jvmti)->RedefineClasses(agent_data->jvmti, 1, class_definitions);
 	if (error != JVMTI_ERROR_NONE) {
-		log("failed to redefine class - error code: %d", error);
+		log_debug("failed to redefine class - error code: %d", error);
 	} else {
-		log("class redefined");
+		log_debug("class redefined");
 	}
 }
 
 static void* redefine_class_activity(void* arg) {
 	AgentData* agent_data = (AgentData*)atomic_load(&agent_data_ref);
 
-	log("'redefine class' thread started");
+	log_debug("'redefine class' thread started");
 
 	JNIEnv* jni = NULL;
 	jint attach_thread_status = (*agent_data->jvm)->AttachCurrentThread(agent_data->jvm, (void**)&jni, NULL);
 	if (attach_thread_status != JNI_OK) {
-		log("failed to attach 'redefine class' thread");
+		log_debug("failed to attach 'redefine class' thread");
 		return NULL;
 	}
 
 	int i = 0;
 	while (true) {
-		log("%d: 'redefine class' thread running", ++i);
+		log_debug("%d: 'redefine class' thread running", ++i);
 
 		sleep(1);
 
@@ -86,15 +87,15 @@ static void* redefine_class_activity(void* arg) {
 
 			struct stat class_file_stat;
 			if (stat(class_file_path, &class_file_stat) == -1) {
-				log("failed to find class file");
+				log_debug("failed to find class file");
 				break;
 			}
 
-			log("class file size: %lld", class_file_stat.st_size);
+			log_debug("class file size: %lld", class_file_stat.st_size);
 
 			FILE* class_file = fopen(class_file_path, "rb");
 			if (class_file == NULL) {
-				log("failed to open class file");
+				log_debug("failed to open class file");
 				break;
 			}
 
@@ -108,7 +109,7 @@ static void* redefine_class_activity(void* arg) {
 
 	(*agent_data->jvm)->DetachCurrentThread(agent_data->jvm);
 
-	log("'redefine class' thread exiting");
+	log_debug("'redefine class' thread exiting");
 
 	return NULL;
 }
@@ -117,9 +118,9 @@ static void JNICALL ClassPreparedHandler(jvmtiEnv* jvmti, JNIEnv* jni, jthread t
 	char* class_signature;
 	jvmtiError error = (*jvmti)->GetClassSignature(jvmti, klass, &class_signature, NULL);
 	if (error != JVMTI_ERROR_NONE) {
-		log("failed to get class signature");
+		log_debug("failed to get class signature");
 	} else {
-		log("class loaded: %s", class_signature);
+		log_debug("class loaded: %s", class_signature);
 
 		AgentData* agent_data = (AgentData*)atomic_load(&agent_data_ref);
 
@@ -134,13 +135,13 @@ static void JNICALL VMInitEventHandler(jvmtiEnv* jvmti, JNIEnv* jni, jthread thr
 	pthread_t redefine_class_thread;
     int thread_create_status = pthread_create(&redefine_class_thread, NULL, redefine_class_activity, NULL);
     if (thread_create_status != 0) {
-    	log("failed to start 'redefine class' service thread");
+    	log_debug("failed to start 'redefine class' service thread");
     	return;
     }
 
-    log("'redefine class' service thread started");
+    log_debug("'redefine class' service thread started");
 
-	log("VM initialization completed");
+	log_debug("VM initialization completed");
 }
 
 JNIEXPORT jint JNICALL Agent_OnLoad(JavaVM* jvm, char* options, void* reserved) {
@@ -167,9 +168,9 @@ JNIEXPORT jint JNICALL Agent_OnLoad(JavaVM* jvm, char* options, void* reserved) 
 
     atomic_store(&agent_data_ref, (uintptr_t)&agent_data);
 
-    log("got JVMTI environment");
+    log_debug("got JVMTI environment");
 
-    log("configuring capabilities");
+    log_debug("configuring capabilities");
 
     static jvmtiCapabilities capabilities;
     memset(&capabilities, 0, sizeof(jvmtiCapabilities));
@@ -178,23 +179,23 @@ JNIEXPORT jint JNICALL Agent_OnLoad(JavaVM* jvm, char* options, void* reserved) 
 
     jvmtiError error = (*jvmti)->AddCapabilities(jvmti, &capabilities);
     if (error != JVMTI_ERROR_NONE) {
-    	log("failed to configure capabilities - error: %d", error);
+    	log_debug("failed to configure capabilities - error: %d", error);
     	return JNI_ERR;
     }
 
-    log("capabilities configured");
+    log_debug("capabilities configured");
 
-    log("configuring event handlers");
+    log_debug("configuring event handlers");
 
     error = (*jvmti)->SetEventNotificationMode(jvmti, JVMTI_ENABLE, JVMTI_EVENT_CLASS_PREPARE, NULL);
     if (error != JVMTI_ERROR_NONE) {
-    	log("failed to enable 'CLASS_PREPARE' event notification");
+    	log_debug("failed to enable 'CLASS_PREPARE' event notification");
     	return JNI_ERR;
     }
 
     error = (*jvmti)->SetEventNotificationMode(jvmti, JVMTI_ENABLE, JVMTI_EVENT_VM_INIT, NULL);
     if (error != JVMTI_ERROR_NONE) {
-    	log("failed to enable 'VM_INIT' event notification");
+    	log_debug("failed to enable 'VM_INIT' event notification");
     	return JNI_ERR;
     }
 
@@ -206,13 +207,13 @@ JNIEXPORT jint JNICALL Agent_OnLoad(JavaVM* jvm, char* options, void* reserved) 
 
     error = (*jvmti)->SetEventCallbacks(jvmti, &eventCallbacks, sizeof eventCallbacks);
     if (error != JVMTI_ERROR_NONE) {
-    	log("failed to configure event handlers");
+    	log_debug("failed to configure event handlers");
     	return JNI_ERR;
     }
 
-    log("event handlers configured");
+    log_debug("event handlers configured");
 
-    log("agent loaded");
+    log_debug("agent loaded");
 
     return JNI_OK;
 }
@@ -225,7 +226,7 @@ JNIEXPORT void JNICALL Agent_OnUnload(JavaVM* jvm) {
 
 	hash_map_free(agent_data->classes);
 
-	log("unloading agent");
+	log_debug("unloading agent");
 
 	fclose(agent_data->log_file);
 }
