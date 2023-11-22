@@ -40,43 +40,44 @@ static void log_debug(const char* format, ...) {
 static void redefine_class(FILE* class_file, jint class_bytes_count) {
 	AgentData* agent_data = (AgentData*)atomic_load(&agent_data_ref);
 
+	JNIEnv* jni = NULL;
+	jint attach_thread_status = (*agent_data->jvm)->AttachCurrentThread(agent_data->jvm, (void**)&jni, NULL);
+	if (attach_thread_status != JNI_OK) {
+		log_debug("failed to attach 'redefine class' thread");
+		return;
+	}
+
 	log_debug("reading class file bytes");
 
 	unsigned char class_file_bytes[class_bytes_count];
 	size_t blocks_read = fread(class_file_bytes, class_bytes_count, 1, class_file);
 	if (blocks_read < 1) {
 		log_debug("failed to read class file bytes");
-		return;
-	}
-
-	jclass klass = hash_map_get(agent_data->classes, "LService;");
-	jvmtiClassDefinition class_definitions[] = {
-			{ klass, class_bytes_count, class_file_bytes }
-	};
-
-	log_debug("redefining class");
-	jvmtiError error = (*agent_data->jvmti)->RedefineClasses(agent_data->jvmti, 1, class_definitions);
-	if (error != JVMTI_ERROR_NONE) {
-		log_debug("failed to redefine class - error code: %d", error);
 	} else {
-		log_debug("class redefined");
+		jclass klass = hash_map_get(agent_data->classes, "LService;");
+		jvmtiClassDefinition class_definitions[] = {
+				{ klass, class_bytes_count, class_file_bytes }
+		};
+
+		log_debug("redefining class");
+		jvmtiError error = (*agent_data->jvmti)->RedefineClasses(agent_data->jvmti, 1, class_definitions);
+		if (error != JVMTI_ERROR_NONE) {
+			log_debug("failed to redefine class - error code: %d", error);
+		} else {
+			log_debug("class redefined");
+		}
 	}
+
+	(*agent_data->jvm)->DetachCurrentThread(agent_data->jvm);
 }
 
 static void* redefine_class_activity(void* arg) {
 	AgentData* agent_data = (AgentData*)atomic_load(&agent_data_ref);
 
-	log_debug("'redefine class' thread started");
-
-	JNIEnv* jni = NULL;
-	jint attach_thread_status = (*agent_data->jvm)->AttachCurrentThread(agent_data->jvm, (void**)&jni, NULL);
-	if (attach_thread_status != JNI_OK) {
-		log_debug("failed to attach 'redefine class' thread");
-		return NULL;
-	}
+	log_debug("'redefine class' thread is running");
 
 	int i = 0;
-	while (true) {
+	for (;;) {
 		log_debug("%d: 'redefine class' thread running", ++i);
 
 		sleep(1);
@@ -102,12 +103,8 @@ static void* redefine_class_activity(void* arg) {
 			redefine_class(class_file, class_file_stat.st_size);
 
 			fclose(class_file);
-
-			break;
 		}
 	}
-
-	(*agent_data->jvm)->DetachCurrentThread(agent_data->jvm);
 
 	log_debug("'redefine class' thread exiting");
 
@@ -142,6 +139,10 @@ static void JNICALL VMInitEventHandler(jvmtiEnv* jvmti, JNIEnv* jni, jthread thr
     log_debug("'redefine class' service thread started");
 
 	log_debug("VM initialization completed");
+}
+
+static void JNICALL VMDeathEventHandler(jvmtiEnv* jvmti, JNIEnv* jni) {
+	log_debug("VM is dead");
 }
 
 JNIEXPORT jint JNICALL Agent_OnLoad(JavaVM* jvm, char* options, void* reserved) {
@@ -199,13 +200,20 @@ JNIEXPORT jint JNICALL Agent_OnLoad(JavaVM* jvm, char* options, void* reserved) 
     	return JNI_ERR;
     }
 
+	error = (*jvmti)->SetEventNotificationMode(jvmti, JVMTI_ENABLE, JVMTI_EVENT_VM_DEATH, NULL);
+	if (error != JVMTI_ERROR_NONE) {
+		log_debug("failed to enable 'VM_DEATH' event notification");
+		return JNI_ERR;
+	}
+
     jvmtiEventCallbacks eventCallbacks;
     memset(&eventCallbacks, 0, sizeof(jvmtiEventCallbacks));
 
     eventCallbacks.ClassPrepare = ClassPreparedHandler;
     eventCallbacks.VMInit = VMInitEventHandler;
+	eventCallbacks.VMDeath = VMDeathEventHandler;
 
-    error = (*jvmti)->SetEventCallbacks(jvmti, &eventCallbacks, sizeof eventCallbacks);
+    error = (*jvmti)->SetEventCallbacks(jvmti, &eventCallbacks, sizeof(eventCallbacks));
     if (error != JVMTI_ERROR_NONE) {
     	log_debug("failed to configure event handlers");
     	return JNI_ERR;
