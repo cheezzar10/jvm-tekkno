@@ -12,6 +12,7 @@
 
 #include <pthread.h>
 #include <sys/stat.h>
+#include <sys/inotify.h>
 
 #include "hashmap.h"
 
@@ -22,6 +23,7 @@ typedef struct {
 	jvmtiEnv* jvmti;
 	FILE* log_file;
 	HashMap* classes;
+	int inotify_fd;
 	char* classes_dir;
 } AgentData;
 
@@ -42,9 +44,7 @@ static void log_debug(const char* format, ...) {
 	fflush(log_file);
 }
 
-static void redefine_class(FILE* class_file, jint class_bytes_count) {
-	AgentData* agent_data = (AgentData*)atomic_load(&agent_data_ref);
-
+static void redefine_class(AgentData* agent_data, FILE* class_file, jint class_bytes_count) {
 	JNIEnv* jni = NULL;
 	jint attach_thread_status = (*agent_data->jvm)->AttachCurrentThread(agent_data->jvm, (void**)&jni, NULL);
 	if (attach_thread_status != JNI_OK) {
@@ -79,37 +79,55 @@ static void redefine_class(FILE* class_file, jint class_bytes_count) {
 static void* redefine_class_activity(void* arg) {
 	log_debug("'redefine class' thread is running");
 
-	int i = 0;
+	const size_t event_buf_size = sizeof(struct inotify_event) + PATH_MAX + 1;
+	char event_buf[event_buf_size];
+
+	AgentData* agent_data = (AgentData*)atomic_load(&agent_data_ref);
+
 	for (;;) {
-		log_debug("%d: 'redefine class' thread running", ++i);
+		log_debug("watching classes directory: %s", agent_data->classes_dir);
 
-		sleep(1);
-
-		// TODO check class modification time
-		if (i == 15) {
-			const char* class_file_path = "bin/Service.class";
-
-			struct stat class_file_stat;
-			if (stat(class_file_path, &class_file_stat) == -1) {
-				log_debug("failed to find class file");
-				break;
-			}
-
-			log_debug("class file size: %lld", class_file_stat.st_size);
-
-			FILE* class_file = fopen(class_file_path, "rb");
-			if (class_file == NULL) {
-				log_debug("failed to open class file");
-				break;
-			}
-
-			redefine_class(class_file, class_file_stat.st_size);
-
-			fclose(class_file);
+		ssize_t event_size = read(agent_data->inotify_fd, event_buf, event_buf_size);
+		if (event_size == 0 || event_size == -1) {
+			log_debug("failed to read event - stopping 'redefine class' thread");
+			break;
 		}
+
+		struct inotify_event* event = (struct inotify_event*)event_buf;
+
+		size_t classes_dir_path_len = strnlen(agent_data->classes_dir, PATH_MAX);
+		size_t file_name_len = strnlen(event->name, NAME_MAX);
+		// allocating enougn bytes for class dir path length + '/' + class file name length + '\0'
+		char class_file_path[classes_dir_path_len + 1 + file_name_len + 1];
+
+		memcpy(class_file_path, agent_data->classes_dir, classes_dir_path_len);
+		class_file_path[classes_dir_path_len] = '/';
+		class_file_path[classes_dir_path_len + 1] = '\0';
+
+		strncat(class_file_path, event->name, file_name_len);
+
+		log_debug("class file %s changed", class_file_path);
+
+		struct stat class_file_stat;
+		if (stat(class_file_path, &class_file_stat) == -1) {
+			log_debug("failed to find class file");
+			break;
+		}
+
+		log_debug("class file size: %lld", class_file_stat.st_size);
+
+		FILE* class_file = fopen(class_file_path, "rb");
+		if (class_file == NULL) {
+			log_debug("failed to open class file");
+			break;
+		}
+
+		redefine_class(agent_data, class_file, class_file_stat.st_size);
+
+		fclose(class_file);
 	}
 
-	log_debug("'redefine class' thread exiting");
+	log_debug("'redefine class' thread stopping...");
 
 	return NULL;
 }
@@ -206,6 +224,12 @@ JNIEXPORT jint JNICALL Agent_OnLoad(JavaVM* jvm, char* options, void* reserved) 
 	char* classes_dir = get_agent_option_value(options, "classes_dir", DEFAULT_CLASSES_DIR);
 	fprintf(log_file, "classes dir: %s\n", classes_dir);
 
+	int inotify_fd = inotify_init();
+	if (inotify_fd == -1) {
+		fprintf(log_file, "failed to open inotify descriptor\n");
+		return JNI_ERR;
+	}
+
     jvmtiEnv* jvmti = NULL;
     if ((*jvm)->GetEnv(jvm, (void**)&jvmti, JVMTI_VERSION_1_0) != JNI_OK) {
         return JNI_ERR;
@@ -215,6 +239,14 @@ JNIEXPORT jint JNICALL Agent_OnLoad(JavaVM* jvm, char* options, void* reserved) 
     agent_data.jvm = jvm;
     agent_data.jvmti = jvmti;
     agent_data.log_file = log_file;
+
+	int add_watch_status = inotify_add_watch(inotify_fd, classes_dir, IN_CLOSE_WRITE);	
+	if (add_watch_status == -1) {
+		fprintf(log_file, "failed to add classes dir inotify watch\n");
+		return JNI_ERR;
+	}
+
+	agent_data.inotify_fd = inotify_fd;
 	agent_data.classes_dir = classes_dir;
 
 	// TODO check new hash map allocation success
@@ -286,6 +318,8 @@ JNIEXPORT void JNICALL Agent_OnUnload(JavaVM* jvm) {
 	AgentData* agent_data = (AgentData*)atomic_load(&agent_data_ref);
 
 	hash_map_free(agent_data->classes);
+
+	free(agent_data->classes_dir);
 
 	log_debug("unloading agent");
 
