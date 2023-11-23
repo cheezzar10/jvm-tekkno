@@ -5,6 +5,8 @@
 #include <unistd.h>
 #include <stdarg.h>
 #include <stdint.h>
+#include <stdlib.h>
+#include <limits.h>
 
 #include "jvmti.h"
 
@@ -13,11 +15,14 @@
 
 #include "hashmap.h"
 
+const char* const DEFAULT_CLASSES_DIR = "bin";
+
 typedef struct {
 	JavaVM* jvm;
 	jvmtiEnv* jvmti;
 	FILE* log_file;
 	HashMap* classes;
+	char* classes_dir;
 } AgentData;
 
 static atomic_uintptr_t agent_data_ref = ATOMIC_VAR_INIT(0);
@@ -72,8 +77,6 @@ static void redefine_class(FILE* class_file, jint class_bytes_count) {
 }
 
 static void* redefine_class_activity(void* arg) {
-	AgentData* agent_data = (AgentData*)atomic_load(&agent_data_ref);
-
 	log_debug("'redefine class' thread is running");
 
 	int i = 0;
@@ -138,11 +141,57 @@ static void JNICALL VMInitEventHandler(jvmtiEnv* jvmti, JNIEnv* jni, jthread thr
 
     log_debug("'redefine class' service thread started");
 
+	// TODO detach 'redefine class' thread
+
 	log_debug("VM initialization completed");
 }
 
 static void JNICALL VMDeathEventHandler(jvmtiEnv* jvmti, JNIEnv* jni) {
 	log_debug("VM is dead");
+}
+
+// copying passed in string to dynamically allocated buffer
+// client is responsible for memory reclaiming
+static char* copy_string(const char* str, size_t max_length) {
+	size_t copy_buf_size = strnlen(str, max_length) + 1;
+
+	char* copy_buf = malloc(copy_buf_size);
+	if (copy_buf == NULL) {
+		return NULL;
+	}
+
+	strncpy(copy_buf, str, copy_buf_size);
+
+	return copy_buf;
+}
+
+static char* get_agent_option_value(char* options, const char* name, const char* default_value) {
+	if (options == NULL) {
+		char* default_value_copy = copy_string(default_value, PATH_MAX);
+		if (default_value_copy == NULL) {
+			return NULL;
+		}
+
+		return default_value_copy;
+	}
+
+	char* name_value_sep_pos = strchr(options, '=');
+
+	if (name_value_sep_pos == NULL) {
+		char* default_value_copy = copy_string(default_value, PATH_MAX);
+		if (default_value_copy == NULL) {
+			return NULL;
+		}
+
+		return default_value_copy;
+	} else {
+		char* option_value_copy = copy_string(name_value_sep_pos + 1, PATH_MAX);
+		if (option_value_copy == NULL) {
+			return NULL;
+		}
+
+		return option_value_copy;
+	}
 }
 
 JNIEXPORT jint JNICALL Agent_OnLoad(JavaVM* jvm, char* options, void* reserved) {
@@ -152,7 +201,10 @@ JNIEXPORT jint JNICALL Agent_OnLoad(JavaVM* jvm, char* options, void* reserved) 
     	return JNI_ERR;
     }
 
-    fprintf(log_file, "loading agent\n");
+    fprintf(log_file, "loading agent - options: '%s'\n", options);
+
+	char* classes_dir = get_agent_option_value(options, "classes_dir", DEFAULT_CLASSES_DIR);
+	fprintf(log_file, "classes dir: %s\n", classes_dir);
 
     jvmtiEnv* jvmti = NULL;
     if ((*jvm)->GetEnv(jvm, (void**)&jvmti, JVMTI_VERSION_1_0) != JNI_OK) {
@@ -163,6 +215,7 @@ JNIEXPORT jint JNICALL Agent_OnLoad(JavaVM* jvm, char* options, void* reserved) 
     agent_data.jvm = jvm;
     agent_data.jvmti = jvmti;
     agent_data.log_file = log_file;
+	agent_data.classes_dir = classes_dir;
 
 	// TODO check new hash map allocation success
 	agent_data.classes = hash_map_new(16, NULL);
