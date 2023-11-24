@@ -15,6 +15,7 @@
 #include <sys/inotify.h>
 
 #include "hashmap.h"
+#include "classload.h"
 
 const char* const DEFAULT_CLASSES_DIR = "bin";
 
@@ -54,17 +55,25 @@ static void redefine_class(AgentData* agent_data, FILE* class_file, jint class_b
 
 	log_debug("reading class file bytes");
 
-	unsigned char class_file_bytes[class_bytes_count];
+	uint8_t class_file_bytes[class_bytes_count];
 	size_t blocks_read = fread(class_file_bytes, class_bytes_count, 1, class_file);
 	if (blocks_read < 1) {
 		log_debug("failed to read class file bytes");
 	} else {
-		jclass klass = hash_map_get(agent_data->classes, "LService;");
+		JClass* loaded_class = jclass_load(class_file_bytes);
+
+		char class_signature[strnlen(loaded_class->name, PATH_MAX) + 3];
+		// TODO use snprintf, check return value for buffer overrun
+		sprintf(class_signature, "L%s;", loaded_class->name);
+
+		jclass_free(loaded_class);
+
+		jclass klass = hash_map_get(agent_data->classes, class_signature);
 		jvmtiClassDefinition class_definitions[] = {
 				{ klass, class_bytes_count, class_file_bytes }
 		};
 
-		log_debug("redefining class");
+		log_debug("redefining class: %s", class_signature);
 		jvmtiError error = (*agent_data->jvmti)->RedefineClasses(agent_data->jvmti, 1, class_definitions);
 		if (error != JVMTI_ERROR_NONE) {
 			log_debug("failed to redefine class - error code: %d", error);
@@ -97,14 +106,11 @@ static void* redefine_class_activity(void* arg) {
 
 		size_t classes_dir_path_len = strnlen(agent_data->classes_dir, PATH_MAX);
 		size_t file_name_len = strnlen(event->name, NAME_MAX);
+
 		// allocating enougn bytes for class dir path length + '/' + class file name length + '\0'
 		char class_file_path[classes_dir_path_len + 1 + file_name_len + 1];
-
-		memcpy(class_file_path, agent_data->classes_dir, classes_dir_path_len);
-		class_file_path[classes_dir_path_len] = '/';
-		class_file_path[classes_dir_path_len + 1] = '\0';
-
-		strncat(class_file_path, event->name, file_name_len);
+		// TODO check return value
+		sprintf(class_file_path, "%s/%s", agent_data->classes_dir, event->name);
 
 		log_debug("class file %s changed", class_file_path);
 

@@ -18,7 +18,8 @@ COMPILE.c = $(CC) $(INCLUDES) $(CFLAGS) $(CPPFLAGS) $(TARGET_ARCH) -c
 .PHONY: all
 all: $(OUTPUT_DIR)/$(AGENT_LIB)
 
-$(OUTPUT_DIR)/$(AGENT_LIB): $(OUTPUT_DIR)/$(AGENT_NAME).o $(OUTPUT_DIR)/hashmap.o
+# TODO collect all object files
+$(OUTPUT_DIR)/$(AGENT_LIB): $(OUTPUT_DIR)/$(AGENT_NAME).o $(OUTPUT_DIR)/hashmap.o $(OUTPUT_DIR)/classload.o
 	$(LINK.o) -o $@ $^ 
 
 define compile-obj
@@ -33,6 +34,10 @@ $(OUTPUT_DIR)/$(AGENT_NAME).o: $(AGENT_NAME).c
 
 .INTERMEDIATE: $(OUTPUT_DIR)/hashmap.o
 $(OUTPUT_DIR)/hashmap.o: hashmap.c
+	$(compile-obj)
+
+.INTERMEDIATE: $(OUTPUT_DIR)/classload.o
+$(OUTPUT_DIR)/classload.o: classload.c
 	$(compile-obj)
 
 .PHONY: clean
