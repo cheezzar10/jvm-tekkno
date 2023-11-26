@@ -7,9 +7,6 @@
 
 #include "classload.h"
 
-// reusing agent logging facility
-void log_debug(const char* format, ...);
-
 typedef struct {
    uint16_t first;
    uint16_t second; 
@@ -59,7 +56,6 @@ static int read_utf8_const_pool_entry(int cp_entry_idx, CPool* const_pool, const
     size_t utf8_buf_len = utf8_length + 1;
     char* utf8_buf = malloc(utf8_buf_len);
     if (utf8_buf == NULL) {
-        log_debug("UTF8 buffer allocation failed");
         return CP_SLOT_STOP;
     }
 
@@ -80,7 +76,6 @@ static int read_int_const_pool_entry(int cp_entry_idx, CPool* const_pool, const 
    // allocating 4 bytes for integer constant
    uint32_t* int_buf = malloc(sizeof(uint32_t));
    if (int_buf == NULL) {
-       log_debug("int buffer allocation failed");
        return CP_SLOT_STOP;
    }
 
@@ -99,7 +94,6 @@ static int read_long_const_pool_entry(int cp_entry_idx, CPool* const_pool, const
     // allocating 8 bytes for long constant
     uint64_t* long_buf = malloc(sizeof(uint64_t));
     if (long_buf == NULL) {
-        log_debug("long buffer allocation failed");
         return CP_SLOT_STOP;
     }
 
@@ -117,7 +111,6 @@ static int read_long_const_pool_entry(int cp_entry_idx, CPool* const_pool, const
 static int read_double_const_pool_entry(int cp_entry_idx, CPool* const_pool, const uint8_t* buffer, size_t* buffer_pos) {
     double* double_buf = malloc(sizeof(double));
     if (double_buf == NULL) {
-        log_debug("double value buffer allocation failed");
         return CP_SLOT_STOP;
     }
 
@@ -135,7 +128,6 @@ static int read_double_const_pool_entry(int cp_entry_idx, CPool* const_pool, con
 static int read_float_const_pool_entry(int cp_entry_idx, CPool* const_pool, const uint8_t* buffer, size_t* buffer_pos) {
     float* float_buf = malloc(sizeof(float));
     if (float_buf == NULL) {
-        log_debug("float buffer allocation failed");
         return CP_SLOT_STOP;
     }
 
@@ -167,7 +159,6 @@ static int read_ref_const_pool_entry(CPTag cp_entry_tag, int cp_entry_idx, CPool
 
    CPIndexPair* index_pair = cp_index_pair_new(class_index, name_type_index);
    if (index_pair == NULL) {
-       log_debug("index pair allocation failed");
        return CP_SLOT_STOP;
    }
 
@@ -184,7 +175,6 @@ static int read_nametype_const_pool_entry(int cp_entry_idx, CPool* const_pool, c
 
    CPIndexPair* index_pair = cp_index_pair_new(name_index, type_index);
    if (index_pair == NULL) {
-       log_debug("index pair allocation failed");
         return CP_SLOT_STOP;
    }
 
@@ -202,7 +192,6 @@ static int read_method_handle_const_pool_entry(int cp_entry_idx, CPool* const_po
 
     CPIndexPair* tag_ref_index_pair = cp_index_pair_new(method_handle_tag, ref_index);
     if (tag_ref_index_pair == NULL) {
-        log_debug("(method handle tag, ref) pair allocation failed");
         return CP_SLOT_STOP;
     }
 
@@ -216,7 +205,6 @@ static int read_method_handle_const_pool_entry(int cp_entry_idx, CPool* const_po
 static int read_utf8_ref_const_pool_entry(CPTag cp_entry_tag, int cp_entry_idx, CPool* const_pool, const uint8_t* buffer, size_t* buffer_pos) {
     uint16_t* utf8_ref_cp_entry_index_ptr = malloc(sizeof(uint16_t));
     if (utf8_ref_cp_entry_index_ptr == NULL) {
-        log_debug("UTF-8 entry index buffer allocation failed");
         return CP_SLOT_STOP;
     }
 
@@ -249,7 +237,6 @@ static int read_const_pool_entry(int cp_entry_idx, CPool* const_pool, const uint
         case CPMethodType: return read_utf8_ref_const_pool_entry(CPMethodType, cp_entry_idx, const_pool, buffer, buffer_pos);
         case CPInvokeDynamic: return read_ref_const_pool_entry(CPInvokeDynamic, cp_entry_idx, const_pool, buffer, buffer_pos); // fix, first arg is BSM index
         default: 
-            log_debug("unknown constant pool entry tag: %d at index %d\n", cp_entry_tag, cp_entry_idx);
             return CP_SLOT_STOP;
     }
 }
@@ -266,22 +253,18 @@ static char* get_class_name(int cp_entry_idx, CPool* const_pool) {
 JClass* jclass_load(const uint8_t* buffer) {
     size_t buffer_pos = 0;
     
-    uint32_t magic_number = read_uint32(buffer, &buffer_pos);
-    log_debug("magic number: %X", magic_number);
-
-    uint16_t minor_version = read_uint16(buffer, &buffer_pos);
-    log_debug("minor version: %d", minor_version);
-
-    uint16_t major_version = read_uint16(buffer, &buffer_pos);
-    log_debug("major version: %d", major_version);
+    // magic number
+    read_uint32(buffer, &buffer_pos);
+    // minor version
+    read_uint16(buffer, &buffer_pos);
+    // major version
+    read_uint16(buffer, &buffer_pos);
 
     uint16_t cp_size = read_uint16(buffer, &buffer_pos) - 1;
-    log_debug("constant pool size: %d", cp_size);
 
     size_t cp_obj_size = sizeof(CPool) + cp_size * sizeof(CPEntry);
     CPool* const_pool = malloc(cp_obj_size);
     if (const_pool == NULL) {
-        log_debug("constant pool allocation failed");
         return NULL;
     }
 
@@ -297,16 +280,14 @@ JClass* jclass_load(const uint8_t* buffer) {
         cp_entry_idx += next_cp_entry_distance;
     }
 
-    uint16_t access_flags = read_uint16(buffer, &buffer_pos);
-    log_debug("access flags: %X", access_flags);
+    // access flags
+    read_uint16(buffer, &buffer_pos);
 
     uint16_t this_class_cp_entry_idx = read_uint16(buffer, &buffer_pos);
     char* class_name = get_class_name(this_class_cp_entry_idx, const_pool);
-    log_debug("class name: %s", class_name);
 
     JClass* jclass = malloc(sizeof(JClass));
     if (jclass == NULL) {
-        log_debug("JClass allocation failed");
         return NULL;
     }
 
