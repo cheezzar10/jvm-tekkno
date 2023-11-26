@@ -12,7 +12,10 @@ typedef enum {
     CPFieldRef = 9,
     CPMethodRef = 10,
     CPInterfaceMethodRef = 11,
-    CPNameAndType = 12
+    CPNameAndType = 12,
+    CPMethodHandle = 15,
+    CPMethodType = 16,
+    CPInvokeDynamic = 18
 } CPTag;
 
 typedef struct {

@@ -8,11 +8,11 @@
 #include <stdlib.h>
 #include <limits.h>
 
-#include "jvmti.h"
-
 #include <pthread.h>
 #include <sys/stat.h>
 #include <sys/inotify.h>
+
+#include <jvmti.h>
 
 #include "hashmap.h"
 #include "classload.h"
